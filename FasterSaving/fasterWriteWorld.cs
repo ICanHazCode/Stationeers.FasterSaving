@@ -1,212 +1,394 @@
 ﻿using Assets.Scripts.Serialization;
 using Assets.Scripts.Voxel;
 using HarmonyLib;
+using Mono.Cecil;
+using Mono.Cecil.Cil;
+using Mono.Collections.Generic;
+using MonoMod.Utils;
+using MonoMod.Utils.Cil;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Reflection.Emit;
+using System.Text;
+using SR = System.Reflection;
+using SRE = System.Reflection.Emit;
 
-namespace net.icanhazcode.stationeers.fastersaving
+namespace stationeers.fastersaving
 {
 	[HarmonyPatch(typeof(XmlSaveLoad), "WriteWorld")]
-	public static class FasterWriteWorld
+	class FasterWriteWorld
 	{
-		[HarmonyTranspiler]
-		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions, ILGenerator generator)
+
+		private static void Log(string s)
 		{
-			// to do the enumeration
-			LocalBuilder hashset_enumerator = generator.DeclareLocal(typeof(HashSet<Asteroid>.Enumerator));
-			int hashsetEnumerator = hashset_enumerator.LocalIndex;
+			PatchWriteWorld.Instance.Log(s);
+		}
 
-			//location of new List<Asteroid>()
-			bool FoundListInit = false;
-			//List<Asteroid> local var list index
-			ushort FoundListInitStack = 0;
-			//current progress through code list
-			int tracking = 0;
-			//
-			int nullify_Start;
-			int nullify_end = 0;
+		private static void LogError(string error)
+		{
+			PatchWriteWorld.Instance.LogError(error);
+		}
 
-			List<CodeInstruction> codes = new List<CodeInstruction>(instructions);
-			for (int i = 0; i < codes.Count; i++)
+		private static void printCode(IEnumerable<CodeInstruction> codes, Collection<VariableDefinition> locals, string header)
+		{
+			StringBuilder sb = new StringBuilder(header);
+			sb.Append("\nCode:\n");
+			//cecilGen.DefineLabel();
+
+			sb.AppendLine(".locals(");
+			foreach (VariableDefinition local in locals)
 			{
-				if (codes[i].opcode == OpCodes.Newobj)
+				sb.AppendLine(string.Format("\t{0,-3}:\t{1}", local.Index, local.VariableType));
+			}
+			sb.AppendLine(")\n======================");
+			int i = 0;
+
+			foreach (CodeInstruction code in codes)
+			{
+				string ln = code.labels.Count > 0 ? string.Format("lbl[{0}]", code.labels[0].GetHashCode())
+												: i.ToString();
+				i++;
+				sb.AppendLine(string.Format("{0,-8}:{1,-10}\t{2}",
+											ln,
+											code.opcode,
+											code.operand is SRE.Label ? $"lbl[{code.operand.GetHashCode()}]" :
+											code.operand is LocalBuilder lb ? $"Local:{lb.LocalType} ({lb.LocalIndex})" :
+											code.operand is string ? $"\"{code.operand}\"" :
+											code.operand is MethodBase info ? info.FullDescription() :
+											code.operand
+											)
+							);
+			}
+
+			Log(sb.ToString());
+
+		}
+
+
+		[HarmonyTranspiler]
+		static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions,
+														SRE.ILGenerator generator,
+														SR.MethodBase methodInfo)
+		{
+			CecilILGenerator cecilGen = generator.GetProxiedShim<CecilILGenerator>();
+			Collection<VariableDefinition> locals = cecilGen.IL.Body.Variables;
+			if (PatchWriteWorld.Debug) printCode(instructions, locals, "Before Transpiler:");
+			//Wrapper to output code changes
+			IEnumerable<CodeInstruction> codes;
+			bool fail;
+			try
+			{
+				codes = Xpiler(instructions, generator, methodInfo).ToArray();
+				fail = false;
+			}
+			catch (Exception ex)
+			{
+				fail = true;
+				LogError($"Error in Xpiler: {ex}");
+				codes = null;
+			}
+			//locals = cecilGen.IL.Body.Variables;
+			if (!fail) if (PatchWriteWorld.Debug) printCode(codes, locals, "After Transpiler:");
+			return fail ? instructions : codes;
+		}
+
+		public static void Serialize_Asteroids(ref HashSet<Asteroid> list, ref BinaryWriter writer)
+		{
+			foreach (Asteroid a in list)
+			{
+				a.SerializeBytes(ref writer);
+			}
+		}
+
+		private static bool ReplaceConstructor(ref List<CodeInstruction> codes, LocalBuilder hashsetVar)
+		{
+			bool retval = false;
+			//Log($"Constructor by typeof     :{typeof(List<Asteroid>).GetConstructor(new Type[] { }).FullDescription()}");
+			ConstructorInfo constructorInfo = typeof(List<Asteroid>).GetConstructor(new Type[] { });
+			//var constructorInfo = typeof(HashSet<Asteroid>).GetMethod(".ctor",)
+			for (int index = 0; index < codes.Count; index++)
+			{
+				CodeInstruction ins = codes[index];
+				if (index < 123)
 				{
-					if (typeof(List<Asteroid>).GetConstructor(Type.EmptyTypes).Equals(codes[i].operand))
+					if (ins.opcode == SRE.OpCodes.Newobj)
 					{
-						if (codes[i + 1].opcode == OpCodes.Stloc_S)
+						if (PatchWriteWorld.Debug)
 						{
-							FoundListInit = true;
-							FoundListInitStack = (ushort)codes[i + 1].operand;
-							codes[i].operand = typeof(HashSet<Asteroid>).GetConstructor(Type.EmptyTypes);
-							tracking = i + 1;
+							Log($"Found newobj opcode line:{index}");
+							Log($"Operand:{ins.operand.GetType()}");
+							Log($"Operand:{((MethodBase)ins.operand).FullDescription()}");
+						}
+						if (constructorInfo.Equals(ins.operand))
+						{
+
+							//CecilGen.IL.Create();
+							if (PatchWriteWorld.Debug) Log("Found constructor");
+							ConstructorInfo hsC = typeof(HashSet<Asteroid>).GetConstructor(new Type[] { });
+							codes[index++] = new CodeInstruction(SRE.OpCodes.Newobj, hsC);
+							codes[index++] = new CodeInstruction(SRE.OpCodes.Stloc_S, hashsetVar);
+							retval = true;
 							break;
 						}
-
 					}
 				}
-			}
-			if (!FoundListInit)
-			{
 
 			}
+			return retval;
+		}
 
+		private static bool RemoveContainsChecks(ref List<CodeInstruction> codes, LocalBuilder hashsetVar)
+		{
+			bool retval = false;
+			int countedremove = 0;
+			Type listtype = typeof(List<Asteroid>);
+			for (int index = 123; index < codes.Count; index++)
 			{
-				int tempAsteroidID = 0;
-				//if (asteroid != null && !list.Contains(asteroid))
-				for (int i = tracking; i < codes.Count; i++)
+				CodeInstruction ins = codes[index];
+				//NOP the Contains check .. 2 locations
+				if (index < 403)
 				{
-					if (codes[i].opcode == OpCodes.Call
-						&& codes[i + 1].opcode == OpCodes.Isinst
-						&& codes[i + 1].operand is Asteroid)
+					// Push List<Asteroid> var to stack
+					// This should apply 2x
+					if (ins.opcode == SRE.OpCodes.Ldloc_S && ((LocalBuilder)ins.operand).LocalType == listtype)
 					{
-						i += 2;
+						// Call List<Asteroid>.Contains(value) ... nop whole thing
+						if (codes[index + 2].opcode == SRE.OpCodes.Callvirt)
+						{
+							if (typeof(List<Asteroid>)
+									.GetMethod(nameof(List<Asteroid>.Contains), new Type[] { typeof(Asteroid) })
+									.Equals(codes[index + 2].operand))
+							{
+								//NOP next 5 
+								countedremove++;
+								if (PatchWriteWorld.Debug) Log($"Found contains {countedremove} of 2");
+								for (int t = index + 5; index < t; index++)
+								{
+									codes[index] = new CodeInstruction(SRE.OpCodes.Nop);
+								}
+								continue;
+							}
 
-						tempAsteroidID = (ushort)codes[i].operand;
-						tracking = i;
+						}
+					}
+
+				}
+				if (index > 403) break;
+
+			}
+			if (countedremove == 2)
+			{
+				retval = true;
+			}
+			return retval;
+		}
+
+		private static bool ReplaceAdd(ref List<CodeInstruction> codes, LocalBuilder hashsetVar)
+		{
+
+			bool retval = false;
+			int countedreplace = 0;
+			Type listtype = typeof(List<Asteroid>);
+			for (int index = 123; index < codes.Count; index++)
+			{
+				CodeInstruction ins = codes[index];
+				//NOP the Contains check .. 2 locations
+				if (index < 403)
+				{
+					// Push List<Asteroid> var to stack
+					// This should apply 2x
+					if (ins.opcode == SRE.OpCodes.Ldloc_S && ((LocalBuilder)ins.operand).LocalType == listtype)
+					{
+						if (codes[index + 2].opcode == SRE.OpCodes.Callvirt)
+						{
+							//Call List<Asteroid>.Add(value) change to HashSet<Asteroid>.Add(value)
+							if (typeof(List<Asteroid>)
+									.GetMethod(nameof(List<Asteroid>.Add), new Type[] { typeof(Asteroid) })
+									.Equals(codes[index + 2].operand))
+							{
+								countedreplace++;
+								if (PatchWriteWorld.Debug) Log($"Found Add {countedreplace} of 2");
+								codes[index++] = new CodeInstruction(SRE.OpCodes.Ldloc_S, hashsetVar);
+								index++;
+								codes[index] = new CodeInstruction(SRE.OpCodes.Callvirt, AccessTools.Method(typeof(HashSet<Asteroid>), nameof(HashSet<Asteroid>.Add)));
+								continue;
+
+							}
+						}
+					}
+				}
+				if (index > 403) break;
+			}
+			if (countedreplace == 2) retval = true;
+			return retval;
+		}
+
+		private static bool ReplaceLoop(ref List<CodeInstruction> codes, LocalBuilder hashsetVar)
+		{
+			bool retval = false;
+			LocalBuilder localWriter = null;
+			//Find the local BinaryWriter
+			for (int index = 423; index < 454; index++)
+			{
+				if (codes[index].opcode == SRE.OpCodes.Ldloc_S)
+				{
+					if (codes[index].operand is LocalBuilder lb
+						&& lb.LocalType.Equals(typeof(System.IO.BinaryWriter)))
+					{
+						if (PatchWriteWorld.Debug) Log("Found BinaryWriter");
+						localWriter = lb;
 						break;
 					}
 				}
-				for (int i = tracking; i < codes.Count; i++)
+			}
+
+			for (int index = 423; index < codes.Count; index++)
+			{
+				// Now to fix the loop
+				//This one will be easy, as we just call a subroutine and nop the loop here
+				if (index < 455) // Should be around ldfld ChunkSize
 				{
-					if (codes[1].opcode == OpCodes.Ldnull && codes[i + 1].opcode == OpCodes.Call)
+					//We begin at a nop
+					if (codes[index].opcode == SRE.OpCodes.Nop)
 					{
-						i += 2;
-						nullify_Start = i;
-						for (int ending = i; ending < codes.Count; ending++)
+						//We start here if we're in the right place
+						if (codes[index + 1].opcode == SRE.OpCodes.Ldc_I4_0)
 						{
-							if (codes[ending].opcode == OpCodes.Ldloc_S && (ushort)codes[ending].operand == tempAsteroidID + 1)
+							//We are .. so:
+							// continue nop
+							if (PatchWriteWorld.Debug) Log("Starting loop replacement.");
+							index++;
+							// First parameter
+							codes[index++] = new CodeInstruction(SRE.OpCodes.Ldloca_S, hashsetVar);
+							//Second Parameter
+							codes[index++] = new CodeInstruction(SRE.OpCodes.Ldloca_S, localWriter);
+							// Now call the Function
+							MethodInfo fn = typeof(FasterWriteWorld).GetMethod(nameof(Serialize_Asteroids));
+							if (PatchWriteWorld.Debug) Log($"fn {fn.FullDescription()}");
+							codes[index++] = new CodeInstruction(SRE.OpCodes.Call, fn);
+							bool eol = false;
+							//Now we nop everything till the load of MemoryStream
+							while (!eol)
 							{
-								nullify_end = ending;
-								tracking = ending;
-								break;
+								//last nop
+								if (codes[index].opcode == SRE.OpCodes.Brtrue_S)
+								{
+									//Sanity check
+									if (codes[index + 1].opcode == SRE.OpCodes.Ldloc_S
+										&& codes[index + 1].operand is LocalBuilder lb
+										&& lb.LocalType.Equals(typeof(MemoryStream))
+										)
+									{
+										eol = true;
+									}
+								}
+								codes[index++] = new CodeInstruction(SRE.OpCodes.Nop);
 							}
-						}
-						if (nullify_end > 0)
-						{
-							codes.RemoveRange(nullify_Start, nullify_end - nullify_Start);
-							tracking = nullify_Start;
+							if (PatchWriteWorld.Debug) Log("Finished loop replacement");
+							retval = true;
 							break;
 						}
 					}
 				}
-				//change List<>.Add(asteroid) to HashSet<>.Add(asteroid)
-				for (int i = tracking; i < codes.Count; i++)
-				{
-					if (codes[i].opcode == OpCodes.Ldloc_S && (ushort)codes[i].operand == FoundListInitStack)
-					{
-						if (codes[++i].opcode == OpCodes.Ldloc_S && (ushort)codes[i].operand == tempAsteroidID)
-						{
-							if (codes[++i].opcode == OpCodes.Callvirt)
-							{
-								codes[i].operand = typeof(HashSet<Asteroid>).GetMethod("Add", new Type[] { typeof(Asteroid) });
-								tracking = i + 1;
-								break;
-							}
+			}
+			return retval;
+		}
 
+		private static bool ReplaceLocalObject(ref ILGenerator gen, out LocalBuilder hashsetvar)
+		{
+			CecilILGenerator CecilGen = gen.GetProxiedShim<CecilILGenerator>();
+			Mono.Cecil.Cil.MethodBody body = CecilGen.IL.Body;
+			MethodDefinition method = body.Method;
+			ModuleDefinition module = method.Module;
+			Dictionary<LocalBuilder, VariableDefinition> locals = (Dictionary<LocalBuilder, VariableDefinition>)AccessTools
+																	.Field(typeof(CecilILGenerator), "_Variables")
+																	.GetValue(CecilGen);
+
+			VariableDefinition hashSetDef = new VariableDefinition(module.ImportReference(typeof(HashSet<Asteroid>)));
+
+			LocalBuilder hashsetVar = null;
+			{
+
+				TypeReference listTypeRef = module.ImportReference(typeof(List<Asteroid>));
+				if (PatchWriteWorld.Debug) Log($"listTypeRef:{listTypeRef.FullName}");
+
+				VariableDefinition listVarDef = null;
+				foreach (VariableDefinition local in body.Variables)
+				{
+					if (PatchWriteWorld.Debug) Log($"Local:{local.VariableType.FullName}");
+					if (local.VariableType.ResolveReflection() == listTypeRef.ResolveReflection())
+					{
+						listVarDef = local;
+						KeyValuePair<LocalBuilder, VariableDefinition> listLB = locals.First((x) => x.Value.Index == listVarDef.Index);
+						if (PatchWriteWorld.Debug)
+						{
+							Log($"Found match! {local.Index}");
+							Log($"listVarDef:{listVarDef.VariableType}");
+							Log($"Found Local Index:{listLB.Key.LocalIndex}");
+							Log($"Variables count:{body.Variables.Count}");
 						}
+						hashsetVar = CecilGen.ReplaceLocal(listLB, typeof(HashSet<Asteroid>));
+						break;
 					}
 				}
-			}
-			// remove the !List<Asteroid>.contains()
-			for (int i = tracking; i < codes.Count; i++)
-			{
-				if (codes[i].opcode == OpCodes.Callvirt && typeof(List<Asteroid>).GetMethod("Contains", new Type[] { typeof(Asteroid) }).Equals(codes[i].operand))
+				if (listVarDef == null)
 				{
-					i -= 3;
-					codes.RemoveRange(i, 6);
-					tracking = i; //should be br.s {+2 codes}
-					break;
+					if (PatchWriteWorld.Debug) Log("No match found !!!?");
 				}
 			}
-			//Change List<Asteroid>.Add() to HashSet<Asteroid>.Add()
-			for (int i = tracking; i < codes.Count; i++)
+			hashsetvar = hashsetVar;
+			return hashsetVar != null;
+
+		}
+		private static IEnumerable<CodeInstruction> Xpiler(IEnumerable<CodeInstruction> instructions,
+														ILGenerator generator,
+														SR.MethodBase methodInfo)
+
+		{
+			List<CodeInstruction> codes = instructions.ToList();
+			bool isAborted = false;
+			if (ReplaceLocalObject(ref generator, out LocalBuilder hashsetVar))
 			{
-				if (codes[i].opcode == OpCodes.Callvirt
-					&& typeof(List<Asteroid>).GetMethod("Add",
-												new Type[] { typeof(Asteroid) })
-												.Equals(codes[i].operand))
+				if (ReplaceConstructor(ref codes, hashsetVar))
 				{
-					codes[i].operand = typeof(HashSet<Asteroid>).GetMethod("Add", new Type[] { typeof(Asteroid) });
-					tracking = i + 1; // Should be pointing to a nop
-					break;
+					if (RemoveContainsChecks(ref codes, hashsetVar))
+					{
+						if (ReplaceAdd(ref codes, hashsetVar))
+						{
+							if (!ReplaceLoop(ref codes, hashsetVar))
+							{
+								LogError("Could not replace Serialize loop.");
+								isAborted = true;
+							}
+						}
+						else
+						{
+							LogError("Could not replace Add calls.");
+							isAborted = true;
+						}
+					}
+					else
+					{
+						LogError("Could not remove Contains checks.");
+						isAborted = true;
+					}
+				}
+				else
+				{
+					LogError("Could not replace constructor!");
+					isAborted = true;
 				}
 			}
-			ushort binaryWriterIndex = 0;
-			// get the binaryWriter local index
-			for (int i = tracking; i < codes.Count; i++)
+			else
 			{
-				if (codes[i].opcode == OpCodes.Callvirt
-					&& typeof(System.IO.BinaryWriter)
-							.GetMethod("Write", new Type[] { typeof(int) })
-							.Equals(codes[i].operand))
-				{
-					binaryWriterIndex = (ushort)codes[i - 2].operand;
-					tracking = i + 6;
-					break;
-				}
+				LogError("Could not find List<Asteroid> local variable.");
+				isAborted = true;
 			}
-			//change the for loop to a while enumerable
-			int loopstart = tracking;
-			int loopend = 0;
-			for (int i = tracking; i < codes.Count; i++)
-			{
-				if (codes[i].opcode == OpCodes.Callvirt && typeof(System.IO.MemoryStream).GetMethod("GetBuffer").Equals(codes[i]))
-				{
-					loopend = i - 2;
-					break;
-				}
-			}
-			tracking++;
-			codes[tracking].opcode = OpCodes.Ldloc_S;
-			codes[tracking++].operand = (byte)FoundListInitStack;
-			codes[tracking].opcode = OpCodes.Callvirt;
-			codes[tracking++].operand = typeof(HashSet<Asteroid>).GetMethod("GetEnumerator");
-			codes[tracking].opcode = OpCodes.Stloc_S;
-			codes[tracking++].operand = (byte)hashsetEnumerator;
-			codes[tracking].opcode = OpCodes.Br_S;
-			int futureBR = tracking;
-			codes[++tracking].opcode = OpCodes.Ldloca_S;
-			int myLoop = tracking;
-			codes[tracking++].operand = (byte)hashsetEnumerator;
-			codes[tracking].opcode = OpCodes.Call;
-			codes[tracking++].operand = typeof(HashSet<Asteroid>.Enumerator).GetMethod("get_Current");
-			codes[tracking].opcode = OpCodes.Ldloca_S;
-			codes[tracking++].operand = binaryWriterIndex;
-			codes[tracking].opcode = OpCodes.Callvirt;
-			codes[tracking++].operand = typeof(Asteroid).GetMethod("SerializeBytes", new Type[] { typeof(System.IO.BinaryWriter) });
-			codes[tracking].opcode = OpCodes.Ldloca_S;
-			codes[tracking++].operand = (byte)hashsetEnumerator;
-			codes[tracking].opcode = OpCodes.Call;
-			codes[futureBR].operand = (sbyte)(tracking - futureBR);
-			codes[tracking++].operand = typeof(HashSet<Asteroid>.Enumerator).GetMethod("MoveNext");
-			codes[tracking].opcode = OpCodes.Brtrue_S;
-			codes[tracking].operand = (sbyte)(myLoop - tracking);
-			codes[++tracking].opcode = OpCodes.Leave_S;
-			int ldloc_s_findMemoryStream = tracking;
-			codes[++tracking].opcode = OpCodes.Ldloca_S;
-			codes[tracking++].operand = (byte)hashsetEnumerator;
-			codes[tracking].opcode = OpCodes.Constrained;
-			codes[tracking++].operand = typeof(HashSet<Asteroid>.Enumerator);
-			codes[tracking].opcode = OpCodes.Callvirt;
-			codes[tracking++].operand = typeof(System.IDisposable).GetMethod("Dispose");
-			codes[tracking].opcode = OpCodes.Endfinally;
-			codes[tracking++].operand = null;
-			codes[ldloc_s_findMemoryStream].operand = (sbyte)(tracking - ldloc_s_findMemoryStream);
-
-			int distance = loopend - tracking;
-			codes.RemoveRange(tracking, distance + 1);
-
-
-
-
-
-
-
-
-
-			return codes.AsEnumerable();
+			if (isAborted) return instructions;
+			return codes;
 		}
 	}
 }
