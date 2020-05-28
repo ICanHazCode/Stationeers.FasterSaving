@@ -7,7 +7,7 @@ This mod fixes an issue in how saving is processed.
 
 # Releases
 
-To download, get it from the [Releases] (https://github.com/ICanHazCode/Stationeers.FasterSaving/releases) page.
+To download, get it from the [Releases](https://github.com/ICanHazCode/Stationeers.FasterSaving/releases) page.
 
 # __Requirements__
 This is made with a modified version of [BepInEx 5.0.1](https://github.com/BepInEx/BepInEx/releases) that uses the HarmonyX code at [HarmonyX](https://github.com/BepInEx/HarmonyX).
