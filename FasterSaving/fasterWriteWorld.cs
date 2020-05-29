@@ -7,7 +7,7 @@ using System.Reflection.Emit;
 using System.Text;
 using Assets.Scripts.Serialization;
 using Assets.Scripts.Voxel;
-using ICanHazCode.Utils;
+using ICanHazCode.ModUtils;
 using HarmonyLib;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
