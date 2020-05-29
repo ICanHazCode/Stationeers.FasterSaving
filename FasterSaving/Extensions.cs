@@ -1,17 +1,22 @@
 ﻿using HarmonyLib;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
+using Mono.Collections.Generic;
 using MonoMod.Utils.Cil;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
-
-namespace MonoMod.Utils
+//TODO: Move this to it's own library
+namespace ICanHazCode.Utils
 {
+	/// <summary>
+	/// Extension utilities for BepInEx transpiler modding
+	/// </summary>
 	public static class Extensions
 	{
+		#region Shameless copy from CecilILGenerator
 		private static readonly ConstructorInfo c_LocalBuilder = (from c in typeof(LocalBuilder)
 																  .GetConstructors(BindingFlags.Instance
 																					| BindingFlags.Public
@@ -24,63 +29,59 @@ namespace MonoMod.Utils
 		private static readonly FieldInfo f_LocalBuilder_is_pinned = typeof(LocalBuilder).GetField("is_pinned", BindingFlags.Instance | BindingFlags.NonPublic);
 
 		private static int c_LocalBuilder_params = c_LocalBuilder.GetParameters().Length;
+		#endregion
 
+		public static Dictionary<LocalBuilder, VariableDefinition> GetGenDictionary(this ILGenerator gen)
+		{
+			CecilILGenerator CecilGen = gen.GetProxiedShim<CecilILGenerator>();
+			return (Dictionary<LocalBuilder, VariableDefinition>)AccessTools
+																	.Field(typeof(CecilILGenerator), "_Variables")
+																	.GetValue(CecilGen);
+		}
+
+		public static Collection<VariableDefinition> GetGenVariables(this ILGenerator gen)
+			=> gen.GetProxiedShim<CecilILGenerator>().IL.Body.Variables;
+
+		public static CecilILGenerator GetCecilGen(this ILGenerator gen)
+		   => gen.GetProxiedShim<CecilILGenerator>();
+
+		public static ModuleDefinition GetGenModule(this ILGenerator gen) => gen.GetCecilGen().IL.Body.Method.Module;
+
+		public static IList<LocalBuilder> GetLocalBuilders(this ILGenerator gen)
+			=> GetGenDictionary(gen).Keys.ToList();
 
 		/// <summary>
 		/// replaces a local variable in a method.
 		/// Mercilessly copied from <see cref="MonoMod.Utils.Cil.CecilILGenerator"/>
 		/// <seealso cref="MonoMod.Utils.Cil.CecilILGenerator"/>
 		/// </summary>
-		/// <param name="gen">CecilILGenerator instance</param>
+		/// <param name="gen">ILGenerator instance</param>
 		/// <param name="orig">Original Method Local variable to replace</param>
 		/// <param name="type">Replacement Local variable type</param>
 		/// <param name="pinned">Whether it's a pinned variable.</param>
 		/// <returns></returns>
-		public static LocalBuilder ReplaceLocal(this CecilILGenerator gen, KeyValuePair<LocalBuilder, VariableDefinition> orig, Type type, bool pinned = false)
+		public static LocalBuilder ReplaceLocal(this ILGenerator gen, VariableDefinition orig, Type type, bool pinned = false)
 		{
+
+			//Declare a new local variable in the method
+			LocalBuilder newLocal = gen.DeclareLocal(type, pinned);
 			//ILGenerator Variables dictionary
-			Dictionary<LocalBuilder, VariableDefinition> _Variables = (Dictionary<LocalBuilder, VariableDefinition>)AccessTools
-																	  .Field(typeof(CecilILGenerator), "_Variables")
-																	  .GetValue(gen);
-			Mono.Collections.Generic.Collection<VariableDefinition> Variables = gen.IL.Body.Variables;
-			//TypeReferences
-			TypeReference newTypeRef = gen.IL.Body.Method.Module.ImportReference(type);
-			TypeReference oldTypeRef = orig.Value.VariableType;
-
-
-			//Find original in the locals
-			VariableDefinition oldVarDef = Variables[orig.Value.Index];
-			int index = (oldVarDef.VariableType == oldTypeRef)
-					  ? orig.Value.Index
-					  : Variables.Count;
-
-			//Create a new LocalBuilder Type
-			LocalBuilder newLBHandle = (LocalBuilder)(
-				c_LocalBuilder_params == 4 ? c_LocalBuilder.Invoke(new object[] { index, type, null, pinned }) :
-				c_LocalBuilder_params == 3 ? c_LocalBuilder.Invoke(new object[] { index, type, null }) :
-				c_LocalBuilder_params == 2 ? c_LocalBuilder.Invoke(new object[] { type, null }) :
-				c_LocalBuilder_params == 0 ? c_LocalBuilder.Invoke(new object[] { }) :
-				throw new NotSupportedException()
-			);
-
-			f_LocalBuilder_position?.SetValue(newLBHandle, (ushort)index);
-			f_LocalBuilder_is_pinned?.SetValue(newLBHandle, pinned);
-
-			if (pinned)
-				newTypeRef = new PinnedType(newTypeRef);
-			VariableDefinition newTypeDef = new VariableDefinition(newTypeRef);
-			if (index >= Variables.Count)
-			{
-				Variables.Add(newTypeDef);
-			}
-			else
-			{
-				Variables[orig.Value.Index] = newTypeDef;
-			}
-			_Variables.Remove(orig.Key);
-			_Variables.Add(newLBHandle, newTypeDef);
-			return newLBHandle;
+			Dictionary<LocalBuilder, VariableDefinition> _Variables = gen.GetGenDictionary();
+			Collection<VariableDefinition> VariableDefs = gen.GetGenVariables();
+			// Find old Local Pair
+			KeyValuePair<LocalBuilder, VariableDefinition> KVPairOld = _Variables.First((x) => x.Value.Index == orig.Index);
+			VariableDefinition newLocalDef = _Variables[newLocal];
+			//save the old index
+			int index = KVPairOld.Value.Index;
+			//Remove the old local definition from the Dictionary and List
+			_Variables.Remove(KVPairOld.Key);
+			VariableDefs.Remove(KVPairOld.Value);
+			//Remove the newly created localDef so we can transplant it
+			VariableDefs.Remove(newLocalDef);
+			//Place it in the old location
+			VariableDefs.Insert(index, _Variables[newLocal]);
+			// Return the reference to be used with the transpiler
+			return newLocal;
 		}
-
 	}
 }

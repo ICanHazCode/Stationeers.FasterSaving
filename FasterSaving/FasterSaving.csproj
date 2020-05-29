@@ -32,41 +32,35 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="0Harmony">
-      <HintPath>Z:\Steam\steamapps\common\Stationeers\BepInEx\core\0Harmony.dll</HintPath>
+      <HintPath>..\Libs\0Harmony.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="Assembly-CSharp">
-      <HintPath>Z:\Steam\steamapps\common\Stationeers\rocketstation_Data\Managed\Assembly-CSharp.dll</HintPath>
+      <HintPath>..\Libs\Assembly-CSharp.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="BepInEx">
-      <HintPath>Z:\Steam\steamapps\common\Stationeers\BepInEx\core\BepInEx.dll</HintPath>
+      <HintPath>..\Libs\BepInEx.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="BepInEx.Harmony">
-      <HintPath>Z:\Steam\steamapps\common\Stationeers\BepInEx\core\BepInEx.Harmony.dll</HintPath>
+      <HintPath>..\Libs\BepInEx.Harmony.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="Mono.Cecil, Version=0.10.4.0, Culture=neutral, PublicKeyToken=50cebf1cceb9d05e, processorArchitecture=MSIL">
+    <Reference Include="Mono.Cecil">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>Z:\Steam\steamapps\common\Stationeers\BepInEx\core\Mono.Cecil.dll</HintPath>
+      <HintPath>..\Libs\Mono.Cecil.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="MonoMod.RuntimeDetour">
-      <HintPath>Z:\Steam\steamapps\common\Stationeers\BepInEx\core\MonoMod.RuntimeDetour.dll</HintPath>
+      <HintPath>..\Libs\MonoMod.RuntimeDetour.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="MonoMod.Utils, Version=19.11.5.1, Culture=neutral, processorArchitecture=MSIL">
+    <Reference Include="MonoMod.Utils">
       <SpecificVersion>False</SpecificVersion>
-      <HintPath>Z:\Steam\steamapps\common\Stationeers\BepInEx\core\MonoMod.Utils.dll</HintPath>
+      <HintPath>..\Libs\MonoMod.Utils.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="netstandard">
-      <HintPath>Z:\Steam\steamapps\common\Stationeers\rocketstation_Data\Managed\netstandard.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
-    <Reference Include="System" />
-    <Reference Include="System.Core" />
     <Reference Include="UnityEngine">
       <HintPath>..\Libs\UnityEngine.dll</HintPath>
       <Private>False</Private>
@@ -75,6 +69,15 @@
       <HintPath>..\Libs\UnityEngine.CoreModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="System">
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="System.Core">
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="mscorlib" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Extensions.cs" />
