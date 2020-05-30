@@ -32,7 +32,7 @@ This version is compatible with BepInEx 5.0.1 so you can just drop it in place o
 
 ## Installation
 1. Install BepInEx in the Stationeers steam folder.
-2. Install the [ICanHazCode.ModUtils.dll](https://github.com/ICanHazCode/ModUtils) into BepInEx/core
+2. Install the [ICanHazCode.ModUtils.dll](https://github.com/ICanHazCode/ModUtils/releases) into BepInEx/core
 3. Launch the game, reach the main menu, then quit back out.
 4. In the steam folder, there should now be a folder BepInEx/Plugins
 5. Copy the [stationeers.fastsaves]() folder from this mod into BepInEx/Plugins
