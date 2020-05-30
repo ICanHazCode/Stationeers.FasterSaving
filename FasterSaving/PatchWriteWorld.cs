@@ -5,7 +5,7 @@ using System;
 
 namespace stationeers.fastersaving
 {
-	[BepInPlugin("net.icanhazcode.stationeers.fastersaving", "FasterSaving", "0.1.0.0")]
+	[BepInPlugin("net.icanhazcode.stationeers.fastersaving", "FasterSaving", "0.2.0")]
 	public class PatchWriteWorld : BaseUnityPlugin
 	{
 		public static PatchWriteWorld Instance;

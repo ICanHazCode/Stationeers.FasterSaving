@@ -38,3 +38,6 @@ This version is compatible with BepInEx 5.0.1 so you can just drop it in place o
 5. Copy the [stationeers.fastsaves]() folder from this mod into BepInEx/Plugins
 
 
+## Version
+- v0.1.0 Initail version
+- v0.2.0 Corrected CIL stack errors causing an empty world.bin
