@@ -1,3 +1,6 @@
+# This mod is now obsolete
+Obsolete as of Beta 0.2.2472.11322
+
 # Faster world saving for Stationeers
 This is a QOL improvement
 
